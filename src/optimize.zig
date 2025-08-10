@@ -20,10 +20,10 @@ fn loopCheck(bf_source: []const u8) bool {
     return count == 0;
 }
 
-/// Combine instructions Except `[` and `]`
+/// Combine instructions Except `[` , `]` , `>` and `<`
 /// for later optimization.
 /// the `.data` in `jz/jnz` is incorrect.
-fn combineInstructionsFromSrc(bf_source: []const u8, alloc: std.mem.Allocator) ![]const Opcode {
+fn combineInstructionsFromSrcExceptPtr(bf_source: []const u8, alloc: std.mem.Allocator) ![]const Opcode {
     const srcLen = bf_source.len;
 
     var codes = std.ArrayList(Opcode).init(alloc);
@@ -180,6 +180,7 @@ fn combineInstructionsFromOpCodes(codes: []const Opcode, alloc: std.mem.Allocato
 }
 
 /// Conservative code reordering
+/// Never reorder across `[` , `]` , `,` or `.` (treat as boundaries)
 /// the `.data` in `jz/jnz` is incorrect.
 fn opcodeReordering(codes: []const Opcode, alloc: std.mem.Allocator) ![]const Opcode {
     const codesLen = codes.len;
@@ -203,14 +204,9 @@ fn opcodeReordering(codes: []const Opcode, alloc: std.mem.Allocator) ![]const Op
             right += 1;
         }
 
-        if (right < codesLen) {
-            right += 1;
-        }
-
         if (right - left > 1) {
             var current = &opnodes[left];
             var prev = if (left == 0) &opnodes[codesLen] else &opnodes[left - 1];
-
             while (current != &opnodes[right]) {
                 if (current.data.op == .addp or current.data.op == .subp) {
                     var balance: i64 = if (current.data.op == .addp) 1 else -1;
@@ -269,12 +265,12 @@ fn opcodeReordering(codes: []const Opcode, alloc: std.mem.Allocator) ![]const Op
 /// Never reorder across `[` , `]` , `,` or `.` (treat as boundaries)
 /// the jz/jnz address in output is not correct
 fn codeReordering(bf_source: []const u8, alloc: std.mem.Allocator) ![]const Opcode {
-    const combinedCodes = try combineInstructionsFromSrc(bf_source, alloc);
+    const combinedCodes = try combineInstructionsFromSrcExceptPtr(bf_source, alloc);
     defer alloc.free(combinedCodes);
     return opcodeReordering(combinedCodes, alloc);
 }
 
-fn opcodesToSource(codes: []const Opcode, alloc: std.mem.Allocator) ![]const u8 {
+pub fn opcodesToSource(codes: []const Opcode, alloc: std.mem.Allocator) ![]const u8 {
     var src = std.ArrayList(u8).init(alloc);
     errdefer src.deinit();
 
@@ -314,6 +310,13 @@ fn opcodesToSource(codes: []const Opcode, alloc: std.mem.Allocator) ![]const u8 
             .out => {
                 for (0..c.data) |_| {
                     try src.append('.');
+                }
+            },
+            .set => {
+                if (c.data == 0) {
+                    try src.append('[');
+                    try src.append('-');
+                    try src.append(']');
                 }
             },
             else => {},
@@ -435,11 +438,11 @@ test "reorder" {
 test "unmatched brackets detection" {
     const alloc = std.testing.allocator;
 
-    try std.testing.expectError(error.UnMatchedLoop, combineInstructionsFromSrc("]", alloc));
+    try std.testing.expectError(error.UnMatchedLoop, combineInstructionsFromSrcExceptPtr("]", alloc));
 
-    try std.testing.expectError(error.UnMatchedLoop, combineInstructionsFromSrc("[++", alloc));
+    try std.testing.expectError(error.UnMatchedLoop, combineInstructionsFromSrcExceptPtr("[++", alloc));
 
-    if (combineInstructionsFromSrc("[[]]", alloc)) |optimized| {
+    if (combineInstructionsFromSrcExceptPtr("[[]]", alloc)) |optimized| {
         defer alloc.free(optimized);
     } else |_| {
         try std.testing.expect(false);
