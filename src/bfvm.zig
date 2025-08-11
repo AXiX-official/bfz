@@ -23,9 +23,24 @@ pub fn BFVM(comptime writer: type, comptime reader: type) type {
         }
 
         pub fn executeString(self: *Self, bf_source: []const u8) !void {
+            const compileBegin = std.time.microTimestamp();
+
             const opcodes = try Optimize.optimize(bf_source, self.alloc);
             defer self.alloc.free(opcodes);
+
+            const compileEnd = std.time.microTimestamp();
+            const compile_elapsed_us = compileEnd - compileBegin;
+            const compile_elapsed_s = @as(f64, @floatFromInt(compile_elapsed_us)) / 1_000_000.0;
+
+            const executeBegin = std.time.microTimestamp();
+
             try self.executeOpCodes(opcodes);
+
+            const executeEnd = std.time.microTimestamp();
+            const execute_elapsed_us = executeEnd - executeBegin;
+            const execute_elapsed_s = @as(f64, @floatFromInt(execute_elapsed_us)) / 1_000_000.0;
+            try self.stdout.print("compile time usage: {d:.6}s", .{compile_elapsed_s});
+            try self.stdout.print("execute time usage: {d:.6}s", .{execute_elapsed_s});
         }
 
         fn getMemory(self: *Self) !*u8 {
