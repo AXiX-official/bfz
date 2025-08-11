@@ -14,7 +14,7 @@ pub fn main() !void {
     const stdin = std.io.getStdIn().reader();
     const stdout = std.io.getStdOut().writer();
     const bfvm = BFVM(@TypeOf(stdout), @TypeOf(stdin));
-    var vm = try bfvm.init(alloc, 2048, stdout, stdin);
+    var vm = try bfvm.init(alloc, 1024, stdout, stdin);
 
     try vm.executeFile(args[1]);
     defer vm.deinit();
@@ -22,12 +22,12 @@ pub fn main() !void {
 
 test "mainTest" {
     const alloc = std.testing.allocator;
-    const program = "[+]>>>";
+    const program = ">+++++++++++++++[<+>>>>>>>>++++++++++<<<<<<<-]>+++++[<+++++++++>-]+>>>>>>+[<<+++[>>[-<]<[>]<-]>>[>+>]<[<]>]>[[->>>>+<<<<]>>>+++>-]<[<<<<]<<<<<<<<+[->>>>>>>>>>>>[<+[->>>>+<<<<]>>>>>]<<<<[>>>>>[<<<<+>>>>-]<<<<<-[<<++++++++++>>-]>>>[<<[<+<<+>>>-]<[>+<-]<++<<+>>>>>>-]<<[-]<<-<[->>+<-[>>>]>[[<+>-]>+>>]<<<<<]>[-]>+<<<-[>>+<<-]<]<<<<+>>>>>>>>[-]>[<<<+>>>-]<<++++++++++<[->>+<-[>>>]>[[<+>-]>+>>]<<<<<]>[-]>+>[<<+<+>>>-]<<<<+<+>>[-[-[-[-[-[-[-[-[-<->[-<+<->>]]]]]]]]]]<[+++++[<<<++++++++<++++++++>>>>-]<<<<+<->>>>[>+<<<+++++++++<->>>-]<<<<<[>>+<<-]+<[->-<]>[>>.<<<<[+.[-]]>>-]>[>>.<<-]>[-]>[-]>>>[>>[<<<<<<<<+>>>>>>>>-]<<-]]>>[-]<<<[-]<<<<<<<<]++++++++++.";
 
     const stdin = std.io.getStdIn().reader();
     const stdout = std.io.getStdOut().writer();
     const bfvm = BFVM(@TypeOf(stdout), @TypeOf(stdin));
-    var vm = try bfvm.init(alloc, 2048, stdin, stdout);
+    var vm = try bfvm.init(alloc, 2048, stdout, stdin);
     try vm.executeString(program);
     defer vm.deinit();
 }

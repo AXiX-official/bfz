@@ -1,5 +1,4 @@
 const std = @import("std");
-const Memory = @import("memory.zig").Memory;
 const Optimize = @import("optimize.zig");
 const Op = @import("opcode.zig").Op;
 const Opcode = @import("opcode.zig").Opcode;
@@ -8,18 +7,22 @@ pub fn BFVM(comptime writer: type, comptime reader: type) type {
     return struct {
         const Self = @This();
 
-        memory: Memory(u8, 512),
-        ptr: i64,
+        memory: []u8,
+        ptr: usize = 0,
         alloc: std.mem.Allocator,
         stdout: writer,
         stdin: reader,
+        limit: usize,
+        size: usize = 0,
 
         pub fn init(alloc: std.mem.Allocator, limit: usize, out: writer, in: reader) !Self {
-            return Self{ .memory = try Memory(u8, 512).init(alloc, 0, limit), .ptr = 0, .alloc = alloc, .stdout = out, .stdin = in };
+            const mem = try alloc.alloc(u8, 64);
+            @memset(mem, 0);
+            return Self{ .memory = mem, .alloc = alloc, .stdout = out, .stdin = in, .limit = limit };
         }
 
-        pub fn deinit(self: Self) void {
-            self.memory.deinit();
+        pub fn deinit(self: *Self) void {
+            self.alloc.free(self.memory);
         }
 
         pub fn executeString(self: *Self, bf_source: []const u8) !void {
@@ -41,55 +44,60 @@ pub fn BFVM(comptime writer: type, comptime reader: type) type {
             const execute_elapsed_s = @as(f64, @floatFromInt(execute_elapsed_us)) / 1_000_000.0;
             try self.stdout.print("compile time usage: {d:.6}s\n", .{compile_elapsed_s});
             try self.stdout.print("execute time usage: {d:.6}s\n", .{execute_elapsed_s});
-            try self.stdout.print("bf memory allocated: {}\n", .{self.memory.maxIndex - self.memory.minIndex + 1});
-        }
-
-        fn getMemory(self: *Self) !*u8 {
-            return self.memory.getItem(self.ptr);
+            try self.stdout.print("bf memory allocated: {}\n", .{self.memory.len});
+            try self.stdout.print("bf memory used: {}\n", .{self.size});
         }
 
         pub fn executeOpCodes(self: *Self, codes: []const Opcode) !void {
             var codePtr: usize = 0;
-            while (codePtr < codes.len) {
+            var ptr = self.ptr;
+            while (codePtr < codes.len) : (codePtr += 1) {
                 const code = codes[codePtr];
                 switch (code.op) {
                     .add => {
-                        const mem = try self.getMemory();
-                        mem.* +%= @as(u8, @intCast(code.data));
+                        self.memory[ptr] +%= @as(u8, @truncate(code.data));
                     },
                     .sub => {
-                        const mem = try self.getMemory();
-                        mem.* -%= @as(u8, @intCast(code.data));
+                        self.memory[ptr] -%= @as(u8, @truncate(code.data));
                     },
-                    .addp => self.ptr += @as(i64, @intCast(code.data)),
-                    .subp => self.ptr -= @as(i64, @intCast(code.data)),
+                    .addp => {
+                        ptr += code.data;
+                        if (ptr >= self.limit) {
+                            return error.MemoryOutOfLimit;
+                        }
+                        if (ptr >= self.memory.len) {
+                            const new_size = if (ptr + 1 > self.memory.len * 2) ptr + 1 else self.memory.len * 2;
+                            const new_mem = try self.alloc.alloc(u8, new_size);
+                            @memset(new_mem, 0);
+                            @memcpy(new_mem[0..self.memory.len], self.memory);
+                            self.alloc.free(self.memory);
+                            self.memory = new_mem;
+                        }
+                        self.size = @max(self.size, ptr);
+                    },
+                    .subp => ptr = try std.math.sub(usize, ptr, code.data),
                     .jz => {
-                        const mem = try self.getMemory();
-                        codePtr += if (mem.* == 0) code.data else 0;
+                        codePtr += if (self.memory[ptr] == 0) code.data else 0;
                     },
                     .jnz => {
-                        const mem = try self.getMemory();
-                        codePtr -= if (mem.* != 0) code.data else 0;
+                        codePtr = if (self.memory[ptr] != 0) try std.math.sub(usize, codePtr, code.data) else codePtr;
                     },
                     .in => {
-                        const mem = try self.getMemory();
                         for (0..code.data) |_| {
-                            mem.* = try self.stdin.readByte();
+                            self.memory[ptr] = try self.stdin.readByte();
                         }
                     },
                     .out => {
-                        const mem = try self.getMemory();
-                        try self.stdout.writeByteNTimes(mem.*, code.data);
+                        try self.stdout.writeByteNTimes(self.memory[ptr], code.data);
                     },
                     .nop => {},
                     .set => {
-                        const mem = try self.getMemory();
-                        mem.* = @as(u8, @intCast(code.data));
+                        self.memory[ptr] = @as(u8, @truncate(code.data));
                     },
                     else => unreachable,
                 }
-                codePtr += 1;
             }
+            self.ptr = ptr;
         }
 
         fn readAllFromFile(
