@@ -15,8 +15,8 @@ pub fn BFVM(comptime writer: type, comptime reader: type) type {
         limit: usize,
         size: usize = 0,
 
-        pub fn init(alloc: std.mem.Allocator, limit: usize, out: writer, in: reader) !Self {
-            const mem = try alloc.alloc(u8, 64);
+        pub fn init(alloc: std.mem.Allocator, size: usize, limit: usize, out: writer, in: reader) !Self {
+            const mem = try alloc.alloc(u8, size);
             @memset(mem, 0);
             return Self{ .memory = mem, .alloc = alloc, .stdout = out, .stdin = in, .limit = limit };
         }
@@ -51,20 +51,17 @@ pub fn BFVM(comptime writer: type, comptime reader: type) type {
         pub fn executeOpCodes(self: *Self, codes: []const Opcode) !void {
             var codePtr: usize = 0;
             var ptr = self.ptr;
+            @setRuntimeSafety(false);
             while (codePtr < codes.len) : (codePtr += 1) {
                 const code = codes[codePtr];
                 switch (code.op) {
-                    .add => {
-                        self.memory[ptr] +%= @as(u8, @truncate(code.data));
-                    },
-                    .sub => {
-                        self.memory[ptr] -%= @as(u8, @truncate(code.data));
+                    inline .add, .sub => {
+                        const delta = if (code.op == .add) code.data else -%code.data;
+                        self.memory[ptr] +%= @as(u8, @truncate(delta));
                     },
                     .addp => {
                         ptr += code.data;
-                        if (ptr >= self.limit) {
-                            return error.MemoryOutOfLimit;
-                        }
+                        if (ptr >= self.limit) return error.MemoryOutOfLimit;
                         if (ptr >= self.memory.len) {
                             const new_size = if (ptr + 1 > self.memory.len * 2) ptr + 1 else self.memory.len * 2;
                             const new_mem = try self.alloc.alloc(u8, new_size);
@@ -83,9 +80,8 @@ pub fn BFVM(comptime writer: type, comptime reader: type) type {
                         codePtr = if (self.memory[ptr] != 0) try std.math.sub(usize, codePtr, code.data) else codePtr;
                     },
                     .in => {
-                        for (0..code.data) |_| {
-                            self.memory[ptr] = try self.stdin.readByte();
-                        }
+                        try self.stdin.skipBytes(code.data - 1, .{ .buf_size = 512 });
+                        self.memory[ptr] = try self.stdin.readByte();
                     },
                     .out => {
                         try self.stdout.writeByteNTimes(self.memory[ptr], code.data);
