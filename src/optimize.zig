@@ -179,8 +179,8 @@ fn combineInstructionsFromOpCodes(codes: []const Opcode, alloc: std.mem.Allocato
     return outCodes.toOwnedSlice();
 }
 
-/// Conservative code reordering
-/// Never reorder across `[` , `]` , `,` or `.` (treat as boundaries)
+/// Code reordering
+/// Never reorder across `[` or `]` (treat as boundaries)
 /// the `.data` in `jz/jnz` is incorrect.
 fn opcodeReordering(codes: []const Opcode, alloc: std.mem.Allocator) ![]const Opcode {
     const codesLen = codes.len;
@@ -192,27 +192,36 @@ fn opcodeReordering(codes: []const Opcode, alloc: std.mem.Allocator) ![]const Op
         opnodes[i] = .{ .data = codes[i], .next = &opnodes[i + 1] };
     }
 
-    var left: usize = 0;
-    while (left < codesLen) {
+    var prev = &opnodes[codesLen];
+    var left = opnodes[codesLen].next;
+    var hasIO: bool = false;
+    var ioNode = &opnodes[codesLen];
+    while (left != &opnodes[codesLen]) {
         var right = left;
-        while (right < codesLen and
-            codes[right].op != .jz and
-            codes[right].op != .jnz and
-            codes[right].op != .in and
-            codes[right].op != .out)
+        while (right != &opnodes[codesLen] and
+            right.data.op != .jz and
+            right.data.op != .jnz and
+            !(hasIO and
+                !(right.data.op != .in and right.data.op != .out)))
         {
-            right += 1;
+            if (right != left and (right.data.op == .in or right.data.op == .out)) {
+                hasIO = true;
+            }
+            right = right.next;
         }
 
-        if (right - left > 1) {
-            var current = &opnodes[left];
-            var prev = if (left == 0) &opnodes[codesLen] else &opnodes[left - 1];
-            while (current != &opnodes[right]) {
+        if (right != left.next) {
+            var current = left;
+            while (current != right) {
+                if (hasIO and (current.data.op == .in or current.data.op == .out)) {
+                    ioNode = current;
+                }
+
                 if (current.data.op == .addp or current.data.op == .subp) {
                     var balance: i64 = if (current.data.op == .addp) 1 else -1;
                     var scan = current.next;
 
-                    while (scan != &opnodes[right]) {
+                    while (scan != right) {
                         if (scan.data.op == .addp) {
                             balance += 1;
                         } else if (scan.data.op == .subp) {
@@ -222,9 +231,11 @@ fn opcodeReordering(codes: []const Opcode, alloc: std.mem.Allocator) ![]const Op
                         if (balance == 0) {
                             const opsBegin = scan.next;
                             var opsEnd = scan;
-                            while (opsEnd.next != &opnodes[right] and
+                            while (opsEnd.next != right and
                                 (opsEnd.next.data.op == .add or
-                                    opsEnd.next.data.op == .sub))
+                                    opsEnd.next.data.op == .sub or
+                                    opsEnd.next.data.op == .in or
+                                    opsEnd.next.data.op == .out))
                             {
                                 opsEnd = opsEnd.next;
                             }
@@ -246,7 +257,14 @@ fn opcodeReordering(codes: []const Opcode, alloc: std.mem.Allocator) ![]const Op
             }
         }
 
-        left = right + 1;
+        if (hasIO) {
+            prev = ioNode;
+            left = ioNode.next;
+            hasIO = false;
+        } else {
+            prev = right;
+            left = if (right == &opnodes[codesLen]) right else right.next;
+        }
     }
 
     var reordered = try alloc.alloc(Opcode, codesLen);
@@ -261,8 +279,8 @@ fn opcodeReordering(codes: []const Opcode, alloc: std.mem.Allocator) ![]const Op
     return reordered;
 }
 
-/// Conservative code reordering
-/// Never reorder across `[` , `]` , `,` or `.` (treat as boundaries)
+/// Code reordering
+/// Never reorder across `[` or `]` (treat as boundaries)
 /// the jz/jnz address in output is not correct
 fn codeReordering(bf_source: []const u8, alloc: std.mem.Allocator) ![]const Opcode {
     const combinedCodes = try combineInstructionsFromSrcExceptPtr(bf_source, alloc);
@@ -363,7 +381,7 @@ fn setJmupAddress(codes: []const Opcode, alloc: std.mem.Allocator) ![]const Opco
     var outCodes = std.ArrayList(Opcode).init(alloc);
     errdefer outCodes.deinit();
 
-    var loopStack = std.ArrayList(*Opcode).init(alloc);
+    var loopStack = std.ArrayList(Opcode).init(alloc);
     defer loopStack.deinit();
 
     var i: usize = 0;
@@ -371,22 +389,25 @@ fn setJmupAddress(codes: []const Opcode, alloc: std.mem.Allocator) ![]const Opco
         switch (codes[i].op) {
             .jz => {
                 try outCodes.append(.{ .data = outCodes.items.len, .op = .jz });
-                try loopStack.append(@constCast(&outCodes.getLast()));
+                try loopStack.append(outCodes.getLast());
                 i += 1;
             },
             .jnz => {
                 const pre = loopStack.pop().?;
-                const len: usize = outCodes.items.len - pre.*.data;
+                const len: usize = outCodes.items.len - pre.data;
                 try outCodes.append(.{ .data = len, .op = .jnz });
-                outCodes.items[pre.*.data] = .{ .data = len, .op = .jz };
+                outCodes.items[pre.data] = .{ .data = len, .op = .jz };
                 i += 1;
             },
-            .add, .sub, .addp, .subp, .in, .out => {
+            else => {
                 try outCodes.append(codes[i]);
                 i += 1;
             },
-            else => i += 1,
         }
+    }
+
+    if (loopStack.items.len != 0) {
+        return error.UnMatchedLoop;
     }
 
     return outCodes.toOwnedSlice();

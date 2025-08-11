@@ -52,12 +52,12 @@ pub fn Memory(comptime T: type, comptime blockSize: usize) type {
                 const blockIndex = @mod(index, blockSize);
                 return &(self.map[@as(usize, @intCast(mapIndex))][@as(usize, @intCast(blockIndex))]);
             } else {
-                if (self.mapPostiveSize - @as(usize, @intCast(mapIndex)) > self.mapCapacity) {
-                    try self.resize(self.mapPostiveSize - @as(usize, @intCast(mapIndex)));
+                if (self.mapPostiveSize + @as(usize, @intCast(-mapIndex)) > self.mapCapacity) {
+                    try self.resize(self.mapPostiveSize + @as(usize, @intCast(-mapIndex)));
                 }
-                if (self.mapPostiveSize - @as(usize, @intCast(mapIndex)) > self.mapSize) {
+                if (self.mapPostiveSize + @as(usize, @intCast(-mapIndex)) > self.mapSize) {
                     const mapNegetiveSize = self.mapSize - self.mapPostiveSize;
-                    for ((self.mapCapacity + @as(usize, @intCast(mapIndex)))..(self.mapCapacity - mapNegetiveSize)) |i| {
+                    for ((self.mapCapacity - @as(usize, @intCast(-mapIndex)))..(self.mapCapacity - mapNegetiveSize)) |i| {
                         const newBlock = try self.alloc.alloc(T, blockSize);
                         @memset(newBlock, self.defaultValue);
                         self.map[i] = newBlock;
@@ -65,7 +65,7 @@ pub fn Memory(comptime T: type, comptime blockSize: usize) type {
                     }
                 }
                 const blockIndex = @mod(index, blockSize);
-                return &(self.map[self.mapCapacity + @as(usize, @intCast(mapIndex))][@as(usize, @intCast(blockIndex))]);
+                return &(self.map[self.mapCapacity - @as(usize, @intCast(-mapIndex))][@as(usize, @intCast(blockIndex))]);
             }
         }
 
