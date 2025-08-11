@@ -3,8 +3,6 @@ const std = @import("std");
 pub const Op = enum(u8) {
     /// `+`
     add,
-    /// `-`
-    sub,
     /// `>`
     addp,
     /// `<`
@@ -26,7 +24,6 @@ pub const Op = enum(u8) {
 
 pub const Opcode = union(Op) {
     add: u8,
-    sub: u8,
     addp: usize,
     subp: usize,
     jz: usize,

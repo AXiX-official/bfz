@@ -55,11 +55,7 @@ pub fn BFVM(comptime writer: type, comptime reader: type) type {
             while (codePtr < codes.len) : (codePtr += 1) {
                 const code = codes[codePtr];
                 switch (code) {
-                    inline .add, .sub => |data, op| switch (op) {
-                        .add => self.memory[ptr] +%= data,
-                        .sub => self.memory[ptr] -%= data,
-                        else => comptime unreachable,
-                    },
+                    .add => |data| self.memory[ptr] +%= data,
                     .addp => |data| {
                         ptr += data;
                         if (ptr >= self.limit) return error.MemoryOutOfLimit;

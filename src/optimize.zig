@@ -43,18 +43,13 @@ fn combineInstructionsFromSrcExceptPtr(bf_source: []const u8, alloc: std.mem.All
                     }
                 }
                 i -= 1;
-                if (addCount > subCount) {
-                    try codes.append(.{ .add = @as(u8, @truncate(addCount - subCount)) });
-                } else if (addCount < subCount) {
-                    try codes.append(.{ .sub = @as(u8, @truncate(subCount - addCount)) });
+                const diff = @mod(addCount - subCount, 256);
+                if (diff != 0) {
+                    try codes.append(.{ .add = @as(u8, @truncate(diff)) });
                 }
             },
-            '>' => {
-                try codes.append(.{ .addp = 1 });
-            },
-            '<' => {
-                try codes.append(.{ .subp = 1 });
-            },
+            '>' => try codes.append(.{ .addp = 1 }),
+            '<' => try codes.append(.{ .subp = 1 }),
             inline ',', '.' => |c| {
                 const start = i;
                 while (i + 1 < srcLen and bf_source[i + 1] == c) : (i += 1) {}
@@ -64,12 +59,8 @@ fn combineInstructionsFromSrcExceptPtr(bf_source: []const u8, alloc: std.mem.All
                     else => unreachable,
                 }
             },
-            '[' => {
-                try codes.append(.{ .jz = 0 });
-            },
-            ']' => {
-                try codes.append(.{ .jnz = 0 });
-            },
+            '[' => try codes.append(.{ .jz = 0 }),
+            ']' => try codes.append(.{ .jnz = 0 }),
             else => {},
         }
     }
@@ -89,20 +80,14 @@ fn combineInstructionsFromOpCodes(codes: []const Opcode, alloc: std.mem.Allocato
     var i: usize = 0;
     while (i < codesLen) {
         switch (codes[i]) {
-            .add, .sub => {
-                var addCount: usize = 0;
-                var subCount: usize = 0;
+            .add => {
+                var count: usize = 0;
                 while (i < codesLen) : (i += 1) {
-                    switch (codes[i]) {
-                        .add => |data| addCount += data,
-                        .sub => |data| subCount += data,
-                        else => break,
-                    }
+                    count += if (codes[i] == .add) codes[i].add else break;
                 }
-                if (addCount > subCount) {
-                    try outCodes.append(.{ .add = @as(u8, @truncate(addCount - subCount)) });
-                } else if (addCount < subCount) {
-                    try outCodes.append(.{ .sub = @as(u8, @truncate(subCount - addCount)) });
+                const diff = @mod(count, 256);
+                if (diff != 0) {
+                    try outCodes.append(.{ .add = @as(u8, @truncate(diff)) });
                 }
             },
             .addp, .subp => {
@@ -165,9 +150,7 @@ fn opcodeReordering(codes: []const Opcode, alloc: std.mem.Allocator) ![]const Op
     var opnodes = try alloc.alloc(OpNode, codesLen + 1);
     defer alloc.free(opnodes);
     opnodes[codesLen] = .{ .data = .{ .nop = {} }, .next = &opnodes[0] };
-    for (0..codesLen) |i| {
-        opnodes[i] = .{ .data = codes[i], .next = &opnodes[i + 1] };
-    }
+    for (0..codesLen) |i| opnodes[i] = .{ .data = codes[i], .next = &opnodes[i + 1] };
 
     var prev = &opnodes[codesLen];
     var left = opnodes[codesLen].next;
@@ -207,10 +190,10 @@ fn opcodeReordering(codes: []const Opcode, alloc: std.mem.Allocator) ![]const Op
                             const opsBegin = scan.next;
                             var opsEnd = scan;
                             while (opsEnd.next != right and
-                                (opsEnd.next.data == .add or
-                                    opsEnd.next.data == .sub or
-                                    opsEnd.next.data == .in or
-                                    opsEnd.next.data == .out))
+                                switch (opsEnd.next.data) {
+                                    .add, .in, .out, .nop, .set => true,
+                                    else => false,
+                                })
                             {
                                 opsEnd = opsEnd.next;
                             }
@@ -270,50 +253,26 @@ pub fn opcodesToSource(codes: []const Opcode, alloc: std.mem.Allocator) ![]const
     for (codes) |c| {
         switch (c) {
             .add => |data| {
-                for (0..data) |_| {
-                    try src.append('+');
+                if (data <= 128) {
+                    for (0..data) |_| try src.append('+');
+                } else {
+                    for (0..(0 -% data)) |_| try src.append('-');
                 }
             },
-            .sub => |data| {
-                for (0..data) |_| {
-                    try src.append('-');
-                }
-            },
-            .addp => |data| {
-                for (0..data) |_| {
-                    try src.append('>');
-                }
-            },
-            .subp => |data| {
-                for (0..data) |_| {
-                    try src.append('<');
-                }
-            },
-            .jz => {
-                try src.append('[');
-            },
-            .jnz => {
-                try src.append(']');
-            },
-            .in => |data| {
-                for (0..data) |_| {
-                    try src.append(',');
-                }
-            },
-            .out => |data| {
-                for (0..data) |_| {
-                    try src.append('.');
-                }
-            },
-            .set => {
-                if (c.data == 0) {
+            .addp => |data| for (0..data) |_| try src.append('>'),
+            .subp => |data| for (0..data) |_| try src.append('<'),
+            .jz => try src.append('['),
+            .jnz => try src.append(']'),
+            .in => |data| for (0..data) |_| try src.append(','),
+            .out => |data| for (0..data) |_| try src.append('.'),
+            .set => |data| {
+                if (data == 0) {
                     try src.append('[');
                     try src.append('-');
                     try src.append(']');
                 }
             },
             .nop => {},
-            else => comptime unreachable,
         }
     }
 
@@ -331,14 +290,14 @@ fn setZeroOp(codes: []const Opcode, alloc: std.mem.Allocator) ![]const Opcode {
     while (i < codesLen) : (i += 1) {
         switch (codes[i]) {
             .jz => {
-                if ((codesLen - i > 2) and (codes[i + 1] == .add or codes[i + 1] == .sub) and codes[i + 2] == .jnz) {
+                if ((codesLen - i > 2) and codes[i + 1] == .add and codes[i + 2] == .jnz) {
                     try outCodes.append(.{ .set = 0 });
                     i += 2;
                 } else {
                     try outCodes.append(codes[i]);
                 }
             },
-            .add, .sub, .addp, .subp, .in, .out, .jnz => {
+            .add, .addp, .subp, .in, .out, .jnz => {
                 try outCodes.append(codes[i]);
             },
             .nop, .set => {},
@@ -371,7 +330,7 @@ fn setJmupAddress(codes: []const Opcode, alloc: std.mem.Allocator) ![]const Opco
                 try outCodes.append(.{ .jnz = len });
                 outCodes.items[pre.jz] = .{ .jz = len };
             },
-            .add, .sub, .addp, .subp, .in, .out, .set, .nop => try outCodes.append(codes[i]),
+            .add, .addp, .subp, .in, .out, .set, .nop => try outCodes.append(codes[i]),
         }
     }
 
