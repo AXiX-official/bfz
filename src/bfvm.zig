@@ -14,8 +14,8 @@ pub fn BFVM(comptime writer: type, comptime reader: type) type {
         stdout: writer,
         stdin: reader,
 
-        pub fn init(alloc: std.mem.Allocator, limit: usize, in: reader, out: writer) !Self {
-            return Self{ .memory = try Memory(u8, 512).init(alloc, 0, limit), .ptr = 0, .alloc = alloc, .stdin = in, .stdout = out };
+        pub fn init(alloc: std.mem.Allocator, limit: usize, out: writer, in: reader) !Self {
+            return Self{ .memory = try Memory(u8, 512).init(alloc, 0, limit), .ptr = 0, .alloc = alloc, .stdout = out, .stdin = in };
         }
 
         pub fn deinit(self: Self) void {
@@ -39,8 +39,9 @@ pub fn BFVM(comptime writer: type, comptime reader: type) type {
             const executeEnd = std.time.microTimestamp();
             const execute_elapsed_us = executeEnd - executeBegin;
             const execute_elapsed_s = @as(f64, @floatFromInt(execute_elapsed_us)) / 1_000_000.0;
-            try self.stdout.print("compile time usage: {d:.6}s", .{compile_elapsed_s});
-            try self.stdout.print("execute time usage: {d:.6}s", .{execute_elapsed_s});
+            try self.stdout.print("compile time usage: {d:.6}s\n", .{compile_elapsed_s});
+            try self.stdout.print("execute time usage: {d:.6}s\n", .{execute_elapsed_s});
+            try self.stdout.print("bf memory allocated: {}\n", .{self.memory.maxIndex - self.memory.minIndex + 1});
         }
 
         fn getMemory(self: *Self) !*u8 {
@@ -70,13 +71,15 @@ pub fn BFVM(comptime writer: type, comptime reader: type) type {
                         const mem = try self.getMemory();
                         codePtr -= if (mem.* != 0) code.data else 0;
                     },
-                    .in => for (0..code.data) |_| {
+                    .in => {
                         const mem = try self.getMemory();
-                        mem.* = try self.stdin.readByte();
+                        for (0..code.data) |_| {
+                            mem.* = try self.stdin.readByte();
+                        }
                     },
-                    .out => for (0..code.data) |_| {
+                    .out => {
                         const mem = try self.getMemory();
-                        try self.stdout.writeByte(mem.*);
+                        try self.stdout.writeByteNTimes(mem.*, code.data);
                     },
                     .nop => {},
                     .set => {

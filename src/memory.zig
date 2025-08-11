@@ -12,6 +12,9 @@ pub fn Memory(comptime T: type, comptime blockSize: usize) type {
         mapCapacity: usize,
         defaultValue: T,
         limitSize: usize,
+        blockSize: usize,
+        maxIndex: i64 = 0,
+        minIndex: i64 = 0,
 
         pub fn init(alloc: std.mem.Allocator, defaultValue: T, limit: usize) !Self {
             const block0 = try alloc.alloc(T, blockSize);
@@ -19,7 +22,7 @@ pub fn Memory(comptime T: type, comptime blockSize: usize) type {
             const map = try alloc.alloc([]T, 4);
             errdefer alloc.free(map);
             map[0] = block0;
-            return Self{ .alloc = alloc, .map = map, .mapSize = 1, .mapPostiveSize = 1, .mapCapacity = 4, .defaultValue = defaultValue, .limitSize = limit };
+            return Self{ .alloc = alloc, .map = map, .mapSize = 1, .mapPostiveSize = 1, .mapCapacity = 4, .defaultValue = defaultValue, .limitSize = limit, .blockSize = blockSize };
         }
 
         pub fn deinit(self: Self) void {
@@ -33,6 +36,12 @@ pub fn Memory(comptime T: type, comptime blockSize: usize) type {
         }
 
         pub fn getItem(self: *Self, index: i64) !*T {
+            if (index >= 0) {
+                self.maxIndex = @max(index, self.maxIndex);
+            } else {
+                self.minIndex = @min(index, self.minIndex);
+            }
+
             const mapIndex = @divFloor(index, blockSize);
 
             if (mapIndex >= 0) {
