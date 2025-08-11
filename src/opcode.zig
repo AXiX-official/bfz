@@ -22,10 +22,18 @@ pub const Op = enum(u8) {
     nop,
     /// buff[ptr] = value
     set,
-    _,
 };
 
-pub const Opcode = struct {
-    data: usize,
-    op: Op,
+pub const Opcode = union(Op) {
+    add: u8,
+    sub: u8,
+    addp: usize,
+    subp: usize,
+    jz: usize,
+    jnz: usize,
+    in: usize,
+    out: usize,
+    // extend
+    nop: void,
+    set: u8,
 };

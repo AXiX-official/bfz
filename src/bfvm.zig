@@ -54,13 +54,14 @@ pub fn BFVM(comptime writer: type, comptime reader: type) type {
             @setRuntimeSafety(false);
             while (codePtr < codes.len) : (codePtr += 1) {
                 const code = codes[codePtr];
-                switch (code.op) {
-                    inline .add, .sub => {
-                        const delta = if (code.op == .add) code.data else -%code.data;
-                        self.memory[ptr] +%= @as(u8, @truncate(delta));
+                switch (code) {
+                    inline .add, .sub => |data, op| switch (op) {
+                        .add => self.memory[ptr] +%= data,
+                        .sub => self.memory[ptr] -%= data,
+                        else => comptime unreachable,
                     },
-                    .addp => {
-                        ptr += code.data;
+                    .addp => |data| {
+                        ptr += data;
                         if (ptr >= self.limit) return error.MemoryOutOfLimit;
                         if (ptr >= self.memory.len) {
                             const new_size = if (ptr + 1 > self.memory.len * 2) ptr + 1 else self.memory.len * 2;
@@ -72,25 +73,16 @@ pub fn BFVM(comptime writer: type, comptime reader: type) type {
                         }
                         self.size = @max(self.size, ptr);
                     },
-                    .subp => ptr = try std.math.sub(usize, ptr, code.data),
-                    .jz => {
-                        codePtr += if (self.memory[ptr] == 0) code.data else 0;
-                    },
-                    .jnz => {
-                        codePtr = if (self.memory[ptr] != 0) try std.math.sub(usize, codePtr, code.data) else codePtr;
-                    },
-                    .in => {
-                        try self.stdin.skipBytes(code.data - 1, .{ .buf_size = 512 });
+                    .subp => |data| ptr = try std.math.sub(usize, ptr, data),
+                    .jz => |data| codePtr += if (self.memory[ptr] == 0) data else 0,
+                    .jnz => |data| codePtr = if (self.memory[ptr] != 0) try std.math.sub(usize, codePtr, data) else codePtr,
+                    .in => |data| {
+                        try self.stdin.skipBytes(data - 1, .{ .buf_size = 512 });
                         self.memory[ptr] = try self.stdin.readByte();
                     },
-                    .out => {
-                        try self.stdout.writeByteNTimes(self.memory[ptr], code.data);
-                    },
+                    .out => |data| try self.stdout.writeByteNTimes(self.memory[ptr], data),
                     .nop => {},
-                    .set => {
-                        self.memory[ptr] = @as(u8, @truncate(code.data));
-                    },
-                    else => unreachable,
+                    .set => |data| self.memory[ptr] = @as(u8, @truncate(data)),
                 }
             }
             self.ptr = ptr;

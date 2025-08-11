@@ -30,60 +30,47 @@ fn combineInstructionsFromSrcExceptPtr(bf_source: []const u8, alloc: std.mem.All
     errdefer codes.deinit();
 
     var i: usize = 0;
-    while (i < srcLen) {
+    while (i < srcLen) : (i += 1) {
         switch (bf_source[i]) {
             '+', '-' => {
                 var addCount: usize = 0;
                 var subCount: usize = 0;
-                while (i < srcLen) {
-                    if (bf_source[i] == '+') {
-                        addCount += 1;
-                    } else if (bf_source[i] == '-') {
-                        subCount += 1;
-                    } else {
-                        break;
+                while (i < srcLen) : (i += 1) {
+                    switch (bf_source[i]) {
+                        '+' => addCount += 1,
+                        '-' => subCount += 1,
+                        else => break,
                     }
-                    i += 1;
                 }
+                i -= 1;
                 if (addCount > subCount) {
-                    try codes.append(.{ .data = addCount - subCount, .op = .add });
+                    try codes.append(.{ .add = @as(u8, @truncate(addCount - subCount)) });
                 } else if (addCount < subCount) {
-                    try codes.append(.{ .data = subCount - addCount, .op = .sub });
+                    try codes.append(.{ .sub = @as(u8, @truncate(subCount - addCount)) });
                 }
             },
             '>' => {
-                try codes.append(.{ .data = 1, .op = .addp });
-                i += 1;
+                try codes.append(.{ .addp = 1 });
             },
             '<' => {
-                try codes.append(.{ .data = 1, .op = .subp });
-                i += 1;
+                try codes.append(.{ .subp = 1 });
             },
-            ',' => {
+            inline ',', '.' => |c| {
                 const start = i;
-                while (i + 1 < srcLen and bf_source[i + 1] == ',') {
-                    i += 1;
+                while (i + 1 < srcLen and bf_source[i + 1] == c) : (i += 1) {}
+                switch (c) {
+                    ',' => try codes.append(.{ .in = i - start + 1 }),
+                    '.' => try codes.append(.{ .out = i - start + 1 }),
+                    else => unreachable,
                 }
-                try codes.append(.{ .data = i - start + 1, .op = .in });
-                i += 1;
-            },
-            '.' => {
-                const start = i;
-                while (i + 1 < srcLen and bf_source[i + 1] == '.') {
-                    i += 1;
-                }
-                try codes.append(.{ .data = i - start + 1, .op = .out });
-                i += 1;
             },
             '[' => {
-                try codes.append(.{ .data = 0, .op = .jz });
-                i += 1;
+                try codes.append(.{ .jz = 0 });
             },
             ']' => {
-                try codes.append(.{ .data = 0, .op = .jnz });
-                i += 1;
+                try codes.append(.{ .jnz = 0 });
             },
-            else => i += 1,
+            else => {},
         }
     }
 
@@ -101,68 +88,58 @@ fn combineInstructionsFromOpCodes(codes: []const Opcode, alloc: std.mem.Allocato
 
     var i: usize = 0;
     while (i < codesLen) {
-        switch (codes[i].op) {
+        switch (codes[i]) {
             .add, .sub => {
                 var addCount: usize = 0;
                 var subCount: usize = 0;
-                while (i < codesLen) {
-                    if (codes[i].op == .add) {
-                        addCount += codes[i].data;
-                    } else if (codes[i].op == .sub) {
-                        subCount += codes[i].data;
-                    } else {
-                        break;
+                while (i < codesLen) : (i += 1) {
+                    switch (codes[i]) {
+                        .add => |data| addCount += data,
+                        .sub => |data| subCount += data,
+                        else => break,
                     }
-                    i += 1;
                 }
                 if (addCount > subCount) {
-                    try outCodes.append(.{ .data = addCount - subCount, .op = .add });
+                    try outCodes.append(.{ .add = @as(u8, @truncate(addCount - subCount)) });
                 } else if (addCount < subCount) {
-                    try outCodes.append(.{ .data = subCount - addCount, .op = .sub });
+                    try outCodes.append(.{ .sub = @as(u8, @truncate(subCount - addCount)) });
                 }
             },
             .addp, .subp => {
                 var addpCount: usize = 0;
                 var subpCount: usize = 0;
-                while (i < codesLen) {
-                    if (codes[i].op == .addp) {
-                        addpCount += codes[i].data;
-                    } else if (codes[i].op == .subp) {
-                        subpCount += codes[i].data;
-                    } else {
-                        break;
+                while (i < codesLen) : (i += 1) {
+                    switch (codes[i]) {
+                        .addp => |data| addpCount += data,
+                        .subp => |data| subpCount += data,
+                        else => break,
                     }
-                    i += 1;
                 }
                 if (addpCount > subpCount) {
-                    try outCodes.append(.{ .data = addpCount - subpCount, .op = .addp });
+                    try outCodes.append(.{ .addp = addpCount - subpCount });
                 } else if (addpCount < subpCount) {
-                    try outCodes.append(.{ .data = subpCount - addpCount, .op = .subp });
+                    try outCodes.append(.{ .subp = subpCount - addpCount });
                 }
             },
             .in => {
                 var count: usize = 0;
-                while (i < codesLen) {
-                    if (codes[i].op == .in) {
-                        count += codes[i].data;
-                    } else {
-                        break;
+                while (i < codesLen) : (i += 1) {
+                    switch (codes[i]) {
+                        .in => |data| count += data,
+                        else => break,
                     }
-                    i += 1;
                 }
-                try outCodes.append(.{ .data = count, .op = .in });
+                try outCodes.append(.{ .in = count });
             },
             .out => {
                 var count: usize = 0;
-                while (i < codesLen) {
-                    if (codes[i].op == .out) {
-                        count += codes[i].data;
-                    } else {
-                        break;
+                while (i < codesLen) : (i += 1) {
+                    switch (codes[i]) {
+                        .out => |data| count += data,
+                        else => break,
                     }
-                    i += 1;
                 }
-                try outCodes.append(.{ .data = count, .op = .out });
+                try outCodes.append(.{ .out = count });
             },
             .jz => {
                 try outCodes.append(codes[i]);
@@ -187,7 +164,7 @@ fn opcodeReordering(codes: []const Opcode, alloc: std.mem.Allocator) ![]const Op
 
     var opnodes = try alloc.alloc(OpNode, codesLen + 1);
     defer alloc.free(opnodes);
-    opnodes[codesLen] = .{ .data = .{ .data = 0, .op = .nop }, .next = &opnodes[0] };
+    opnodes[codesLen] = .{ .data = .{ .nop = {} }, .next = &opnodes[0] };
     for (0..codesLen) |i| {
         opnodes[i] = .{ .data = codes[i], .next = &opnodes[i + 1] };
     }
@@ -199,12 +176,10 @@ fn opcodeReordering(codes: []const Opcode, alloc: std.mem.Allocator) ![]const Op
     while (left != &opnodes[codesLen]) {
         var right = left;
         while (right != &opnodes[codesLen] and
-            right.data.op != .jz and
-            right.data.op != .jnz and
-            !(hasIO and
-                !(right.data.op != .in and right.data.op != .out)))
+            right.data != .jz and right.data != .jnz and
+            !(hasIO and !(right.data != .in and right.data != .out)))
         {
-            if (right != left and (right.data.op == .in or right.data.op == .out)) {
+            if (right != left and (right.data == .in or right.data == .out)) {
                 hasIO = true;
             }
             right = right.next;
@@ -213,18 +188,18 @@ fn opcodeReordering(codes: []const Opcode, alloc: std.mem.Allocator) ![]const Op
         if (right != left.next) {
             var current = left;
             while (current != right) {
-                if (hasIO and (current.data.op == .in or current.data.op == .out)) {
+                if (hasIO and (current.data == .in or current.data == .out)) {
                     ioNode = current;
                 }
 
-                if (current.data.op == .addp or current.data.op == .subp) {
-                    var balance: i64 = if (current.data.op == .addp) 1 else -1;
+                if (current.data == .addp or current.data == .subp) {
+                    var balance: i64 = if (current.data == .addp) 1 else -1;
                     var scan = current.next;
 
                     while (scan != right) {
-                        if (scan.data.op == .addp) {
+                        if (scan.data == .addp) {
                             balance += 1;
-                        } else if (scan.data.op == .subp) {
+                        } else if (scan.data == .subp) {
                             balance -= 1;
                         }
 
@@ -232,10 +207,10 @@ fn opcodeReordering(codes: []const Opcode, alloc: std.mem.Allocator) ![]const Op
                             const opsBegin = scan.next;
                             var opsEnd = scan;
                             while (opsEnd.next != right and
-                                (opsEnd.next.data.op == .add or
-                                    opsEnd.next.data.op == .sub or
-                                    opsEnd.next.data.op == .in or
-                                    opsEnd.next.data.op == .out))
+                                (opsEnd.next.data == .add or
+                                    opsEnd.next.data == .sub or
+                                    opsEnd.next.data == .in or
+                                    opsEnd.next.data == .out))
                             {
                                 opsEnd = opsEnd.next;
                             }
@@ -293,24 +268,24 @@ pub fn opcodesToSource(codes: []const Opcode, alloc: std.mem.Allocator) ![]const
     errdefer src.deinit();
 
     for (codes) |c| {
-        switch (c.op) {
-            .add => {
-                for (0..c.data) |_| {
+        switch (c) {
+            .add => |data| {
+                for (0..data) |_| {
                     try src.append('+');
                 }
             },
-            .sub => {
-                for (0..c.data) |_| {
+            .sub => |data| {
+                for (0..data) |_| {
                     try src.append('-');
                 }
             },
-            .addp => {
-                for (0..c.data) |_| {
+            .addp => |data| {
+                for (0..data) |_| {
                     try src.append('>');
                 }
             },
-            .subp => {
-                for (0..c.data) |_| {
+            .subp => |data| {
+                for (0..data) |_| {
                     try src.append('<');
                 }
             },
@@ -320,13 +295,13 @@ pub fn opcodesToSource(codes: []const Opcode, alloc: std.mem.Allocator) ![]const
             .jnz => {
                 try src.append(']');
             },
-            .in => {
-                for (0..c.data) |_| {
+            .in => |data| {
+                for (0..data) |_| {
                     try src.append(',');
                 }
             },
-            .out => {
-                for (0..c.data) |_| {
+            .out => |data| {
+                for (0..data) |_| {
                     try src.append('.');
                 }
             },
@@ -337,7 +312,8 @@ pub fn opcodesToSource(codes: []const Opcode, alloc: std.mem.Allocator) ![]const
                     try src.append(']');
                 }
             },
-            else => {},
+            .nop => {},
+            else => comptime unreachable,
         }
     }
 
@@ -352,22 +328,20 @@ fn setZeroOp(codes: []const Opcode, alloc: std.mem.Allocator) ![]const Opcode {
     errdefer outCodes.deinit();
 
     var i: usize = 0;
-    while (i < codesLen) {
-        switch (codes[i].op) {
+    while (i < codesLen) : (i += 1) {
+        switch (codes[i]) {
             .jz => {
-                if ((codesLen - i > 2) and (codes[i + 1].op == .add or codes[i + 1].op == .sub) and codes[i + 2].op == .jnz) {
-                    try outCodes.append(.{ .data = 0, .op = .set });
-                    i += 3;
+                if ((codesLen - i > 2) and (codes[i + 1] == .add or codes[i + 1] == .sub) and codes[i + 2] == .jnz) {
+                    try outCodes.append(.{ .set = 0 });
+                    i += 2;
                 } else {
                     try outCodes.append(codes[i]);
-                    i += 1;
                 }
             },
             .add, .sub, .addp, .subp, .in, .out, .jnz => {
                 try outCodes.append(codes[i]);
-                i += 1;
             },
-            else => i += 1,
+            .nop, .set => {},
         }
     }
 
@@ -385,24 +359,19 @@ fn setJmupAddress(codes: []const Opcode, alloc: std.mem.Allocator) ![]const Opco
     defer loopStack.deinit();
 
     var i: usize = 0;
-    while (i < codesLen) {
-        switch (codes[i].op) {
+    while (i < codesLen) : (i += 1) {
+        switch (codes[i]) {
             .jz => {
-                try outCodes.append(.{ .data = outCodes.items.len, .op = .jz });
+                try outCodes.append(.{ .jz = outCodes.items.len });
                 try loopStack.append(outCodes.getLast());
-                i += 1;
             },
             .jnz => {
                 const pre = loopStack.pop().?;
-                const len: usize = outCodes.items.len - pre.data;
-                try outCodes.append(.{ .data = len, .op = .jnz });
-                outCodes.items[pre.data] = .{ .data = len, .op = .jz };
-                i += 1;
+                const len: usize = outCodes.items.len - pre.jz;
+                try outCodes.append(.{ .jnz = len });
+                outCodes.items[pre.jz] = .{ .jz = len };
             },
-            else => {
-                try outCodes.append(codes[i]);
-                i += 1;
-            },
+            .add, .sub, .addp, .subp, .in, .out, .set, .nop => try outCodes.append(codes[i]),
         }
     }
 
