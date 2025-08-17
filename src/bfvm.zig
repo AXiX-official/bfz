@@ -1,7 +1,12 @@
 const std = @import("std");
-const Optimize = @import("optimize.zig");
-const Op = @import("opcode.zig").Op;
-const Opcode = @import("opcode.zig").Opcode;
+const lex = @import("parser/lexer.zig").lex;
+const SrcLocation = @import("parser/lexer.zig").SrcLocation;
+const SimpleAstType = @import("parser/parser.zig").SimpleAstType;
+const SimpleAst = @import("parser/parser.zig").SimpleAst;
+const Parse = @import("parser/parser.zig").Parse;
+const SemanticAstType = @import("parser/analyzer.zig").SemanticAstType;
+const SemanticAST = @import("parser/analyzer.zig").SemanticAST;
+const analyze = @import("parser/analyzer.zig").analyze;
 
 pub fn BFVM(comptime writer: type, comptime reader: type) type {
     return struct {
@@ -28,8 +33,15 @@ pub fn BFVM(comptime writer: type, comptime reader: type) type {
         pub fn executeString(self: *Self, bf_source: []const u8) !void {
             const compileBegin = std.time.microTimestamp();
 
-            const opcodes = try Optimize.optimize(bf_source, self.alloc);
-            defer self.alloc.free(opcodes);
+            const tokens = try lex(bf_source, self.alloc);
+            errdefer self.alloc.free(tokens);
+
+            var errorLoc: ?SrcLocation = null;
+            const simple_ast = try Parse(tokens, self.alloc, &errorLoc);
+            errdefer simple_ast.deinit();
+
+            const semantic_ast = try analyze(simple_ast, self.alloc);
+            errdefer semantic_ast.deinit();
 
             const compileEnd = std.time.microTimestamp();
             const compile_elapsed_us = compileEnd - compileBegin;
@@ -37,7 +49,7 @@ pub fn BFVM(comptime writer: type, comptime reader: type) type {
 
             const executeBegin = std.time.microTimestamp();
 
-            try self.executeOpCodes(opcodes);
+            try self.executeSemanticAST(semantic_ast);
 
             const executeEnd = std.time.microTimestamp();
             const execute_elapsed_us = executeEnd - executeBegin;
@@ -46,42 +58,103 @@ pub fn BFVM(comptime writer: type, comptime reader: type) type {
             try self.stdout.print("execute time usage: {d:.6}s\n", .{execute_elapsed_s});
             try self.stdout.print("bf memory allocated: {}\n", .{self.memory.len});
             try self.stdout.print("bf memory used: {}\n", .{self.size});
+
+            self.alloc.free(tokens);
+            simple_ast.deinit();
+            semantic_ast.deinit();
         }
 
-        pub fn executeOpCodes(self: *Self, codes: []const Opcode) !void {
-            var codePtr: usize = 0;
-            var ptr = self.ptr;
+        fn executeSemanticASTEmptyLoop(self: *Self) !void {
+            if (self.memory[self.ptr] == 0)
+                return;
+            return error.DeadLoop;
+        }
+
+        fn executeSemanticASTCountedLoop(self: *Self, ast: SemanticAST) !void {
+            const body = ast.CountedLoop.body;
             @setRuntimeSafety(false);
-            while (codePtr < codes.len) : (codePtr += 1) {
-                const code = codes[codePtr];
-                switch (code) {
-                    .add => |data| self.memory[ptr] +%= data,
-                    .addp => |data| {
-                        ptr += data;
-                        if (ptr >= self.limit) return error.MemoryOutOfLimit;
-                        if (ptr >= self.memory.len) {
-                            const new_size = if (ptr + 1 > self.memory.len * 2) ptr + 1 else self.memory.len * 2;
-                            const new_mem = try self.alloc.alloc(u8, new_size);
-                            @memset(new_mem, 0);
-                            @memcpy(new_mem[0..self.memory.len], self.memory);
-                            self.alloc.free(self.memory);
-                            self.memory = new_mem;
-                        }
-                        self.size = @max(self.size, ptr);
-                    },
-                    .subp => |data| ptr = try std.math.sub(usize, ptr, data),
-                    .jz => |data| codePtr += if (self.memory[ptr] == 0) data else 0,
-                    .jnz => |data| codePtr = if (self.memory[ptr] != 0) try std.math.sub(usize, codePtr, data) else codePtr,
-                    .in => |data| {
-                        try self.stdin.skipBytes(data - 1, .{ .buf_size = 512 });
-                        self.memory[ptr] = try self.stdin.readByte();
-                    },
-                    .out => |data| try self.stdout.writeByteNTimes(self.memory[ptr], data),
-                    .nop => {},
-                    .set => |data| self.memory[ptr] = @as(u8, @truncate(data)),
+            const flag_val = self.memory[self.ptr];
+            if (flag_val == 0) return;
+            const gcd = std.math.gcd(ast.CountedLoop.flag_step, @as(u16, 256));
+            const c: u16 = (256 - @as(u16, @intCast(flag_val))) % 256;
+            var loopCount: u8 = 0;
+            if (c % gcd != 0) {
+                return error.DeadLoop;
+            } else {
+                while (loopCount <= 255) : (loopCount += 1) {
+                    if (flag_val +% (loopCount *% ast.CountedLoop.flag_step) == 0)
+                        break;
                 }
             }
-            self.ptr = ptr;
+            if (ast.CountedLoop.init.?) |init_op| {
+                switch (init_op.*) {
+                    .AddPtr => |offset| self.ptr = @intCast(@as(isize, @intCast(self.ptr)) + offset),
+                    else => unreachable,
+                }
+            }
+            for (0..loopCount) |_| {
+                for (body.items) |child| {
+                    switch (child) {
+                        .AddPtr => |offset| self.ptr = @intCast(@as(isize, @intCast(self.ptr)) + offset),
+                        .VecAdd =>
+                        else => unreachable,
+                    }
+                }
+            }
+        }
+
+        fn executeSemanticASTLoop(self: *Self, ast: SemanticAST) !void {
+            const body = ast.Loop.body;
+            @setRuntimeSafety(false);
+            while (self.memory[self.ptr] != 0) {
+                for (body.items) |child| {
+                    switch (child) {
+                        .Add => |data| self.memory[self.ptr] +%= data,
+                        .AddPtr => |offset| self.ptr = @intCast(@as(isize, @intCast(self.ptr)) + offset),
+                        .Read => |count| {
+                            try self.stdin.skipBytes(count - 1, .{ .buf_size = 512 });
+                            self.memory[self.ptr] = try self.stdin.readByte();
+                        },
+                        .Write => |count| try self.stdout.writeByteNTimes(self.memory[self.ptr], count),
+                        .Loop => try self.executeSemanticASTLoop(child),
+                        .CountedLoop => try self.executeSemanticASTCountedLoop(child),
+                        .EmptyLoop => try self.executeSemanticASTEmptyLoop(),
+                        .SetZero => self.memory[self.ptr] = 0,
+                        .JumpToNextZero => |step| {
+                            while (self.memory[self.ptr] != 0) {
+                                self.ptr = @intCast(@as(isize, @intCast(self.ptr)) + step);
+                            }
+                        },
+                        else => unreachable,
+                    }
+                }
+            }
+        }
+
+        pub fn executeSemanticAST(self: *Self, ast: SemanticAST) !void {
+            const body = ast.MainEntry.body;
+            @setRuntimeSafety(false);
+            for (body.items) |child| {
+                switch (child) {
+                    .Add => |data| self.memory[self.ptr] +%= data,
+                    .AddPtr => |offset| self.ptr = @intCast(@as(isize, @intCast(self.ptr)) + offset),
+                    .Read => |count| {
+                        try self.stdin.skipBytes(count - 1, .{ .buf_size = 512 });
+                        self.memory[self.ptr] = try self.stdin.readByte();
+                    },
+                    .Write => |count| try self.stdout.writeByteNTimes(self.memory[self.ptr], count),
+                    .Loop => try self.executeSemanticASTLoop(child),
+                    .CountedLoop => try self.executeSemanticASTCountedLoop(child),
+                    .EmptyLoop => try self.executeSemanticASTEmptyLoop(),
+                    .SetZero => self.memory[self.ptr] = 0,
+                    .JumpToNextZero => |step| {
+                        while (self.memory[self.ptr] != 0) {
+                            self.ptr = @intCast(@as(isize, @intCast(self.ptr)) + step);
+                        }
+                    },
+                    else => unreachable,
+                }
+            }
         }
 
         fn readAllFromFile(
